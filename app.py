@@ -2,174 +2,126 @@ import streamlit as st
 import pandas as pd
 import requests
 import datetime
-import random
 from openai import OpenAI
+from streamlit_calendar import calendar
 
-# --- 페이지 설정 ---
-st.set_page_config(page_title="AI 습관 트래커", page_icon="📊", layout="wide")
+# --- 설정 및 초기화 ---
+st.set_page_config(page_title="AI Habit Master", page_icon="📊", layout="wide")
 
-# --- 세션 상태 초기화 (샘플 데이터 포함) ---
-if 'history' not in st.session_state:
-    dates = [(datetime.date.today() - datetime.timedelta(days=i)) for i in range(6, 0, -1)]
-    # 데모용 6일치 샘플 데이터
-    st.session_state.history = [
-        {"날짜": d, "달성률": random.randint(40, 100), "기분": random.randint(5, 10)} for d in dates
-    ]
+# 라이브러리 설치 안내: pip install streamlit streamlit-calendar openai requests pandas
+if 'habit_data' not in st.session_state:
+    st.session_state.habit_data = [] # {start: '2023-10-01', title: '80%', color: '#ff4b4b'} 형식
 
-# --- 사이드바: API 설정 ---
+# --- 사이드바 API 설정 ---
 with st.sidebar:
-    st.title("⚙️ 설정")
+    st.header("🔑 API Settings")
     openai_key = st.text_input("OpenAI API Key", type="password")
-    weather_key = st.text_input("OpenWeatherMap API Key", type="password")
-    st.info("API 키는 브라우저 세션에만 유지됩니다.")
+    weather_key = st.text_input("OpenWeatherMap Key", type="password")
+    st.divider()
+    coach_style = st.selectbox("🤖 코치 선택", ["스파르타", "따뜻한 멘토", "게임 마스터"])
+    city = st.text_input("📍 도시 입력", value="Seoul")
 
 # --- 유틸리티 함수 ---
-def get_weather(city, api_key):
+def get_weather_info(city, key):
     try:
-        url = f"http://api.openweathermap.org/data/2.5/weather?q={city}&appid={api_key}&units=metric&lang=kr"
-        response = requests.get(url, timeout=10)
-        if response.status_code == 200:
-            return response.json()
-    except:
-        return None
-    return None
+        url = f"http://api.openweathermap.org/data/2.5/weather?q={city}&appid={key}&units=metric&lang=kr"
+        res = requests.get(url, timeout=5).json()
+        return {"temp": res['main']['temp'], "desc": res['weather'][0]['description'], "main": res['weather'][0]['main']}
+    except: return None
 
-def get_dog_image():
+def get_dog_data():
     try:
-        response = requests.get("https://dog.ceo/api/breeds/image/random", timeout=10)
-        if response.status_code == 200:
-            data = response.json()
-            image_url = data['message']
-            breed = image_url.split('/')[-2].replace('-', ' ').title()
-            return image_url, breed
-    except:
-        return None, None
-    return None, None
+        res = requests.get("https://dog.ceo/api/breeds/image/random", timeout=5).json()
+        breed = res['message'].split('/')[-2].replace('-', ' ')
+        return {"url": res['message'], "breed": breed}
+    except: return None
 
-def generate_report(client, data):
-    # 코치 스타일에 따른 시스템 프롬프트 설정
-    prompts = {
-        "스파르타 코치": "너는 매우 엄격하고 냉정한 스파르타 코치다. 짧고 강렬하게 독설을 섞어 동기부여하라.",
-        "따뜻한 멘토": "너는 다정하고 공감 능력이 뛰어난 멘토다. 사용자의 노력을 칭찬하고 따뜻하게 격려하라.",
-        "게임 마스터": "너는 판타지 RPG의 게임 마스터다. 오늘 하루를 퀘스트 수행으로 간주하고 게임 톤으로 보고서를 작성하라."
+# --- 메인 레이아웃 ---
+col_left, col_right = st.columns([1, 1.2])
+
+with col_left:
+    st.subheader("✅ 오늘의 습관 체크인")
+    
+    # 날씨 기반 AI 추천 미션 (API 연동)
+    weather = get_weather_info(city, weather_key)
+    suggested_habit = "스트레칭 하기" # 기본값
+    if weather:
+        if "Rain" in weather['main']: suggested_habit = "창밖 보며 명상하기"
+        elif weather['temp'] > 25: suggested_habit = "시원한 물 2리터 마시기"
+        st.caption(f"☁️ 현재 {city} 날씨({weather['desc']})에 맞춘 추천 미션: **{suggested_habit}**")
+
+    # 습관 입력 폼
+    with st.form("habit_form"):
+        h1 = st.checkbox("🌅 미라클 모닝")
+        h2 = st.checkbox(f"✨ {suggested_habit} (오늘의 미션)")
+        h3 = st.checkbox("📖 독서/공부 30분")
+        h4 = st.checkbox("💪 운동/산책")
+        h5 = st.checkbox("🥗 건강한 식단")
+        mood = st.select_slider("🎭 오늘 컨디션", options=range(1, 11), value=5)
+        submitted = st.form_submit_button("기록 저장 및 AI 분석")
+
+    if submitted:
+        if not openai_key:
+            st.warning("분석을 위해 OpenAI API 키가 필요합니다.")
+        else:
+            # 데이터 계산
+            habits = [h1, h2, h3, h4, h5]
+            score = sum(habits) * 20
+            dog = get_dog_data()
+            
+            # AI 리포트 생성 (데이터 통합)
+            client = OpenAI(api_key=openai_key)
+            prompt = f"""
+            사용자 정보:
+            - 오늘 습관 달성률: {score}%
+            - 컨디션: {mood}/10
+            - 날씨: {weather['desc'] if weather else '알 수 없음'}
+            - 오늘의 강아지: {dog['breed'] if dog else '믹스견'}
+            - 코치 스타일: {coach_style}
+            
+            요청사항:
+            1. 강아지 품종의 특징과 날씨를 엮어서 오늘 하루를 분석해줘.
+            2. '컨디션 등급(S-D)'을 매겨줘.
+            3. {coach_style} 말투로 내일의 독한/따뜻한 미션을 하나 제안해줘.
+            """
+            
+            with st.spinner("AI가 오늘의 데이터를 조합 중..."):
+                response = client.chat.completions.create(
+                    model="gpt-4o-mini",
+                    messages=[{"role": "user", "content": prompt}]
+                )
+                ai_comment = response.choices[0].message.content
+                
+                # 달력 데이터 저장
+                new_event = {
+                    "title": f"{score}%",
+                    "start": datetime.date.today().isoformat(),
+                    "color": "#00ff00" if score > 70 else "#ff4b4b"
+                }
+                st.session_state.habit_data.append(new_event)
+                
+                # 결과 출력
+                st.success("오늘의 기록이 저장되었습니다!")
+                st.markdown(ai_comment)
+                if dog: st.image(dog['url'], caption=f"오늘의 파트너: {dog['breed']}", width=300)
+
+with col_right:
+    st.subheader("📅 습관 달력")
+    
+    # 달력 설정
+    calendar_options = {
+        "headerToolbar": {"left": "prev,next today", "center": "title", "right": "dayGridMonth"},
+        "initialView": "dayGridMonth",
+        "selectable": True,
     }
     
-    system_msg = prompts.get(data['style'], "친절한 AI 코치")
-    user_content = f"""
-    오늘의 데이터:
-    - 습관 달성률: {data['score']}% (습관: {', '.join(data['habits'])})
-    - 기분 점수: {data['mood']}/10
-    - 현재 날씨: {data['weather_desc']}, 온도 {data['temp']}°C
-    - 오늘의 행운의 강아지: {data['dog_breed']}
+    # 달력 렌더링
+    calendar(events=st.session_state.habit_data, options=calendar_options)
     
-    출력 형식:
-    1. 컨디션 등급 (S~D)
-    2. 습관 분석
-    3. 날씨 코멘트
-    4. 내일 미션
-    5. 오늘의 한마디
-    """
-    
-    try:
-        response = client.chat.completions.create(
-            model="gpt-4o-mini", # 요청하신 gpt-5-mini는 미출시 상태이므로 최신 mini 모델로 설정
-            messages=[
-                {"role": "system", "content": system_msg},
-                {"role": "user", "content": user_content}
-            ]
-        )
-        return response.choices[0].message.content
-    except Exception as e:
-        return f"리포트 생성 실패: {str(e)}"
-
-# --- 메인 UI ---
-st.title("📊 AI 습관 트래커")
-st.markdown("오늘의 습관을 체크하고 AI 코치의 리포트를 받아보세요!")
-
-# 1. 습관 체크인
-with st.container():
-    st.subheader("✅ 오늘의 체크인")
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        h1 = st.checkbox("🌅 기상 미션")
-        h2 = st.checkbox("💧 물 마시기")
-        h3 = st.checkbox("📚 공부/독서")
-    with col2:
-        h4 = st.checkbox("🏋️ 운동하기")
-        h5 = st.checkbox("😴 수면 관리")
-    
-    mood = st.slider("🎭 오늘 당신의 기분은 어떤가요?", 1, 10, 5)
-    
-    c1, c2 = st.columns(2)
-    with c1:
-        city = st.selectbox("📍 도시 선택", ["Seoul", "Busan", "Incheon", "Daegu", "Daejeon", "Gwangju", "Suwon", "Ulsan", "Jeju", "Sejong"])
-    with c2:
-        coach_style = st.radio("🤖 코치 스타일", ["스파르타 코치", "따뜻한 멘토", "게임 마스터"], horizontal=True)
-
-# 2. 통계 계산
-selected_habits = [h for h, checked in zip(["기상 미션", "물 마시기", "공부/독서", "운동하기", "수면"], [h1, h2, h3, h4, h5]) if checked]
-achievement_rate = len(selected_habits) / 5 * 100
-
-# 3. 달성률 대시보드
-st.divider()
-m1, m2, m3 = st.columns(3)
-m1.metric("달성률", f"{achievement_rate}%")
-m2.metric("달성 습관", f"{len(selected_habits)} / 5")
-m3.metric("기분 점수", f"{mood}/10")
-
-# 7일 데이터 차트
-chart_data = pd.DataFrame(st.session_state.history + [{"날짜": "오늘", "달성률": achievement_rate, "기분": mood}])
-st.bar_chart(chart_data, x="날짜", y="달성률")
-
-# 4. 결과 생성 버튼
-if st.button("🚀 컨디션 리포트 생성"):
-    if not openai_key:
-        st.error("OpenAI API Key를 입력해주세요.")
+    st.divider()
+    st.subheader("📈 통계")
+    if st.session_state.habit_data:
+        df = pd.DataFrame(st.session_state.habit_data)
+        st.info(f"지금까지 총 {len(df)}일간 습관을 트래킹했습니다. 계속 정진하세요!")
     else:
-        client = OpenAI(api_key=openai_key)
-        
-        with st.spinner("날씨와 강아지 정보를 가져오며 AI 코치가 분석 중입니다..."):
-            # 데이터 수집
-            weather = get_weather(city, weather_key) if weather_key else None
-            w_desc = weather['weather'][0]['description'] if weather else "정보 없음"
-            w_temp = weather['main']['temp'] if weather else "?? "
-            
-            dog_url, dog_breed = get_dog_image()
-            
-            report_data = {
-                "score": achievement_rate,
-                "habits": selected_habits,
-                "mood": mood,
-                "weather_desc": w_desc,
-                "temp": w_temp,
-                "dog_breed": dog_breed,
-                "style": coach_style
-            }
-            
-            report_text = generate_report(client, report_data)
-            
-            # 결과 표시
-            st.divider()
-            res_col1, res_col2 = st.columns([1, 2])
-            
-            with res_col1:
-                if weather:
-                    st.info(f"📍 {city} 날씨: {w_desc} ({w_temp}°C)")
-                if dog_url:
-                    st.image(dog_url, caption=f"오늘의 행운 견종: {dog_breed}")
-            
-            with res_col2:
-                st.subheader(f"📝 {coach_style}의 분석")
-                st.markdown(report_text)
-                
-                # 공유 기능
-                st.code(f"--- 오늘의 습관 리포트 ---\n달성률: {achievement_rate}%\n기분: {mood}/10\n코치 한마디: {report_text.split('오늘의 한마디')[-1]}", language="text")
-
-# 5. 하단 안내
-with st.expander("ℹ️ API 사용 안내"):
-    st.write("""
-    - **OpenAI API**: AI 리포트 생성을 위해 필요합니다. (GPT-4o-mini 모델 사용)
-    - **OpenWeatherMap**: 현재 도시의 날씨 정보를 가져옵니다.
-    - **Dog CEO API**: 무료로 랜덤 강아지 이미지를 제공받습니다.
-    """)
+        st.write("아직 기록이 없습니다. 왼쪽에서 첫 체크인을 완료하세요!")
